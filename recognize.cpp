@@ -27,7 +27,30 @@ constexpr size_t imageSize = imageSide * imageSide;
 constexpr size_t threshold = 1;
 
 using Label = uint8_t;
-using Image = std::array<uint8_t, imageSize>;
+
+class Image {
+ public:
+  std::array<uint8_t, imageSize> data{};
+  void applyThreshold() {
+    for (auto &pixel : data) {
+      if (pixel < threshold) {
+        pixel = 0;
+      } else {
+        pixel = 1;
+      }
+    }
+  }
+  uint8_t operator[](size_t i) const { return data[i]; }
+  uint8_t &operator[](size_t i) { return data[i]; }
+};
+
+class LabeledImage {
+ public:
+  std::optional<Label> label;
+  Image image;
+
+  LabeledImage(std::optional<Label> label, const Image &image) : label(label), image(image) {}
+};
 
 std::string padString(std::string string, size_t digits) {
   if (string.size() >= digits) return string;
@@ -38,7 +61,7 @@ std::string padString(std::string string, size_t digits) {
   return result;
 }
 
-std::array<svm_node, imageSize + 1> nodesFromImage(const Image &image) {
+std::array<svm_node, imageSize + 1> naiveNodesFromImage(const Image &image) {
   std::array<svm_node, imageSize + 1> array{};
   for (size_t j = 0; j < imageSize; j++) {
     array[j].index = static_cast<int>(j + 1);
@@ -49,58 +72,50 @@ std::array<svm_node, imageSize + 1> nodesFromImage(const Image &image) {
   return array;
 }
 
+std::vector<LabeledImage> readImagesFromFile(const std::string &filename, bool labeled) {
+  std::vector<LabeledImage> labeledImages;
+  std::ifstream ifs(filename);
+  ifs.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  uint16_t value;
+  while (ifs >> value) {
+    std::optional<Label> optionalLabel;
+    if (labeled) optionalLabel = static_cast<Label>(value);
+    Image image;
+    if (!labeled) image[0] = static_cast<uint8_t>(value);
+    for (size_t j = labeled ? 0 : 1; j < imageSize; j++) {
+      char comma;
+      ifs >> comma >> value;
+      image[j] = static_cast<uint8_t>(value);
+    }
+    labeledImages.emplace_back(optionalLabel, image);
+  }
+  return labeledImages;
+}
+
 int main(int argc, char **argv) {
   if (argc < 3) {
-    std::cout << "Usage: " << argv[0] << " [TRAIN] [N] (TEST)" << '\n';
+    std::cout << "Usage: " << argv[0] << " [TRAINING FILE] [N] (TESTING FILE)" << '\n';
   }
   std::string trainingFile = argv[1];
   int n = stringToInteger(argv[2]);
-  std::string testFile;
-  if (argc >= 4) testFile = argv[3];
-  std::vector<Label> labels(n);
-  std::vector<Image> images(n);
-  {
-    std::ifstream ifs(trainingFile);
-    ifs.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-    for (int i = 0; i < n; i++) {
-      uint16_t value;
-      ifs >> value;
-      labels[i] = static_cast<uint8_t>(value);
-      for (size_t j = 0; j < imageSize; j++) {
-        char comma;
-        ifs >> comma >> value;
-        images[i][j] = static_cast<uint8_t>(value);
-      }
-    }
-  }
-  for (int i = 0; i < n; i++) {
-    for (auto &image : images) {
-      for (auto &pixel : image) {
-        if (pixel < threshold) {
-          pixel = 0;
-        } else {
-          pixel = 1;
-        }
-      }
-    }
-  }
+  std::string testingFile;
+  if (argc >= 4) testingFile = argv[3];
+  std::vector<LabeledImage> trainingImages = readImagesFromFile(trainingFile, true);
+  std::vector<LabeledImage> testingImages;
+  if (!testingFile.empty()) readImagesFromFile(testingFile, false);
+  for (auto &labeledImage : trainingImages) labeledImage.image.applyThreshold();
+  for (auto &labeledImage : testingImages) labeledImage.image.applyThreshold();
   svm_problem problem{};
   problem.l = n;
   std::vector<double> ys(n);
-  for (int i = 0; i < n; i++) {
-    ys[i] = labels[i];
-  }
+  for (int i = 0; i < n; i++) ys[i] = trainingImages[i].label.value();
   problem.y = ys.data();
   // Naive.
   std::vector<std::array<svm_node, imageSize + 1>> xs(n);
-  for (int i = 0; i < n; i++) {
-    xs[i] = nodesFromImage(images[i]);
-  }
-  std::vector<svm_node *> xPointers;
-  for (int i = 0; i < n; i++) {
-    xPointers.push_back(xs[i].data());
-  }
-  problem.x = xPointers.data();
+  for (auto &labeledImage : trainingImages) xs.push_back(naiveNodesFromImage(labeledImage.image));
+  std::vector<svm_node *> pointersToXs;
+  for (int i = 0; i < n; i++) pointersToXs.push_back(xs[i].data());
+  problem.x = pointersToXs.data();
   svm_parameter parameter{};
   parameter.svm_type = C_SVC;
   parameter.kernel_type = LINEAR;
@@ -108,9 +123,7 @@ int main(int argc, char **argv) {
   parameter.C = 1.0;
   parameter.eps = svmEps;
   const auto error_message = svm_check_parameter(&problem, &parameter);
-  if (error_message) {
-    throw std::runtime_error(error_message);
-  }
+  if (error_message) throw std::runtime_error(error_message);
   const auto model = svm_train(&problem, &parameter);
   std::vector<std::vector<uint32_t>> results(10, std::vector<uint32_t>(10));
   svm_train(&problem, &parameter);
@@ -132,7 +145,7 @@ int main(int argc, char **argv) {
           }
           image[j] = value;
         }
-        auto nodes = nodesFromImage(image);
+        auto nodes = naiveNodesFromImage(image);
         const auto prediction = svm_predict(model, nodes.data());
         // std::cout << static_cast<uint32_t>(label) << ' ' << prediction << '\n';
         results[label][prediction]++;
