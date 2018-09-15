@@ -57,13 +57,35 @@ std::string padString(std::string string, size_t digits) {
   return result;
 }
 
-std::vector<svm_node> naiveNodesFromImage(const Image &image) {
+std::vector<svm_node> simpleNodesFromImage(const Image &image) {
   std::vector<svm_node> nodes;
-  for (size_t j = 0; j < imageSize; j++) {
-    if (image[j] != 0) {
+  for (size_t i = 0; i < imageSize; i++) {
+    if (image[i] != 0) {
       nodes.push_back(svm_node{});
-      nodes.back().index = static_cast<int>(j + 1);
-      nodes.back().value = image[j];
+      nodes.back().index = static_cast<int>(i + 1);
+      nodes.back().value = image[i];
+    }
+  }
+  nodes.push_back(svm_node{});
+  nodes.back().index = -1;
+  nodes.back().value = 0;
+  return nodes;
+}
+
+std::vector<svm_node> edgeCountersFromImage(const Image &image) {
+  std::vector<size_t> edges(2 * imageSide);
+  for (size_t i = 1; i < imageSide; i++) {
+    for (size_t j = 1; j < imageSide; j++) {
+      if (image[i * imageSide + j] != image[(i - 1) * imageSide + j]) edges[i]++;
+      if (image[i * imageSide + j] != image[i * imageSide + (j - 1)]) edges[imageSide + j]++;
+    }
+  }
+  std::vector<svm_node> nodes;
+  for (size_t i = 0; i < 2 * imageSide; i++) {
+    if (edges[i] != 0) {
+      nodes.push_back(svm_node{});
+      nodes.back().index = static_cast<int>(i + 1);
+      nodes.back().value = edges[i];
     }
   }
   nodes.push_back(svm_node{});
@@ -120,7 +142,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < n; i++) ys[i] = trainingImages[i].label.value();
   problem.y = ys.data();
   std::vector<std::vector<svm_node>> xs;
-  for (int i = 0; i < n; i++) xs.push_back(naiveNodesFromImage(trainingImages[i].image));
+  for (int i = 0; i < n; i++) xs.push_back(edgeCountersFromImage(trainingImages[i].image));
   std::vector<svm_node *> pointersToXs;
   for (int i = 0; i < n; i++) pointersToXs.push_back(xs[i].data());
   problem.x = pointersToXs.data();
@@ -143,7 +165,7 @@ int main(int argc, char **argv) {
   std::cout.flush();
   timer.restart();
   for (int i = 0; i < m; i++) {
-    auto nodes = naiveNodesFromImage(trainingImages[n + i].image);
+    auto nodes = edgeCountersFromImage(trainingImages[n + i].image);
     const auto prediction = svm_predict(model, nodes.data());
     results[trainingImages[n + i].label.value()][prediction]++;
   }
