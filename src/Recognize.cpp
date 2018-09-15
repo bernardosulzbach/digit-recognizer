@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
   std::vector<double> ys(n);
   for (int i = 0; i < n; i++) ys[i] = trainingImages[i].label.value();
   problem.y = ys.data();
-  std::vector<std::array<svm_node, imageSize + 1>> xs(n);
+  std::vector<std::array<svm_node, imageSize + 1>> xs;
   for (int i = 0; i < n; i++) xs.push_back(naiveNodesFromImage(trainingImages[i].image));
   std::vector<svm_node *> pointersToXs;
   for (int i = 0; i < n; i++) pointersToXs.push_back(xs[i].data());
