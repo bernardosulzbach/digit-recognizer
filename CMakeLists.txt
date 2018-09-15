@@ -10,6 +10,6 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
-set(SOURCES svm.cpp svm.h)
+set(SOURCES src/Types.hpp src/Duration.hpp src/Clock.hpp src/Timer.cpp src/Timer.hpp src/SVM.cpp src/SVM.h src/String.cpp src/String.hpp)
 
-add_executable(recognize recognize.cpp ${SOURCES})
+add_executable(recognize src/Recognize.cpp ${SOURCES})

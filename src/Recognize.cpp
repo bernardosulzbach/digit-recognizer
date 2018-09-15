@@ -9,14 +9,10 @@
 #include <sstream>
 #include <vector>
 
-#include "svm.h"
+#include "SVM.h"
 
-inline int stringToInteger(const std::string &string) {
-  std::stringstream ss(string);
-  int integer;
-  ss >> integer;
-  return integer;
-}
+#include "String.hpp"
+#include "Timer.hpp"
 
 constexpr double svmEps = 0.001;
 
@@ -93,26 +89,34 @@ std::vector<LabeledImage> readImagesFromFile(const std::string &filename, bool l
 }
 
 int main(int argc, char **argv) {
-  if (argc < 3) {
-    std::cout << "Usage: " << argv[0] << " [TRAINING FILE] [N] (TESTING FILE)" << '\n';
+  if (argc < 4) {
+    std::cout << "Usage: " << argv[0] << " [TRAINING FILE] [N] [M] (TESTING FILE)" << '\n';
+    return 1;
   }
   std::string trainingFile = argv[1];
   int n = stringToInteger(argv[2]);
+  int m = stringToInteger(argv[3]);
   std::string testingFile;
-  if (argc >= 4) testingFile = argv[3];
+  if (argc >= 5) testingFile = argv[4];
+  Timer timer;
+  timer.start();
+  std::cout << "Reading images...";
+  std::cout.flush();
   std::vector<LabeledImage> trainingImages = readImagesFromFile(trainingFile, true);
+  if (static_cast<unsigned>(n + m) > trainingImages.size()) throw std::runtime_error("Not enough training images.");
   std::vector<LabeledImage> testingImages;
   if (!testingFile.empty()) readImagesFromFile(testingFile, false);
   for (auto &labeledImage : trainingImages) labeledImage.image.applyThreshold();
   for (auto &labeledImage : testingImages) labeledImage.image.applyThreshold();
+  timer.stop();
+  std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
   svm_problem problem{};
   problem.l = n;
   std::vector<double> ys(n);
   for (int i = 0; i < n; i++) ys[i] = trainingImages[i].label.value();
   problem.y = ys.data();
-  // Naive.
   std::vector<std::array<svm_node, imageSize + 1>> xs(n);
-  for (auto &labeledImage : trainingImages) xs.push_back(naiveNodesFromImage(labeledImage.image));
+  for (int i = 0; i < n; i++) xs.push_back(naiveNodesFromImage(trainingImages[i].image));
   std::vector<svm_node *> pointersToXs;
   for (int i = 0; i < n; i++) pointersToXs.push_back(xs[i].data());
   problem.x = pointersToXs.data();
@@ -124,36 +128,23 @@ int main(int argc, char **argv) {
   parameter.eps = svmEps;
   const auto error_message = svm_check_parameter(&problem, &parameter);
   if (error_message) throw std::runtime_error(error_message);
+  std::cout << "Training model...";
+  std::cout.flush();
+  timer.restart();
   const auto model = svm_train(&problem, &parameter);
+  timer.stop();
+  std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
   std::vector<std::vector<uint32_t>> results(10, std::vector<uint32_t>(10));
-  svm_train(&problem, &parameter);
-  {
-    std::ifstream ifs(trainingFile);
-    ifs.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-    while (true) {
-      uint16_t value;
-      if (ifs >> value) {
-        uint8_t label = static_cast<uint8_t>(value);
-        Image image{};
-        for (size_t j = 0; j < imageSize; j++) {
-          char comma;
-          ifs >> comma >> value;
-          if (value < threshold) {
-            value = 0;
-          } else {
-            value = 1;
-          }
-          image[j] = value;
-        }
-        auto nodes = naiveNodesFromImage(image);
-        const auto prediction = svm_predict(model, nodes.data());
-        // std::cout << static_cast<uint32_t>(label) << ' ' << prediction << '\n';
-        results[label][prediction]++;
-      } else {
-        break;
-      }
-    }
+  std::cout << "Evaluating model...";
+  std::cout.flush();
+  timer.restart();
+  for (int i = 0; i < m; i++) {
+    auto nodes = naiveNodesFromImage(trainingImages[n + i].image);
+    const auto prediction = svm_predict(model, nodes.data());
+    results[trainingImages[n + i].label.value()][prediction]++;
   }
+  timer.stop();
+  std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
   size_t right = 0;
   size_t wrong = 0;
   for (size_t r = 0; r < 10; r++) {
@@ -174,7 +165,7 @@ int main(int argc, char **argv) {
       }
     }
   }
-  std::cout << "Got " << right << " of " << (right + wrong) << "." << '\n';
+  std::cout << "Got " << right << " of " << (right + wrong) << "." << ' ';
   std::cout << "Rate is " << right / (double)(right + wrong) << "." << '\n';
   return 0;
 }
