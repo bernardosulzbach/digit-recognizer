@@ -57,15 +57,19 @@ std::string padString(std::string string, size_t digits) {
   return result;
 }
 
-std::array<svm_node, imageSize + 1> naiveNodesFromImage(const Image &image) {
-  std::array<svm_node, imageSize + 1> array{};
+std::vector<svm_node> naiveNodesFromImage(const Image &image) {
+  std::vector<svm_node> nodes;
   for (size_t j = 0; j < imageSize; j++) {
-    array[j].index = static_cast<int>(j + 1);
-    array[j].value = image[j];
+    if (image[j] != 0) {
+      nodes.push_back(svm_node{});
+      nodes.back().index = static_cast<int>(j + 1);
+      nodes.back().value = image[j];
+    }
   }
-  array[imageSize].index = -1;
-  array[imageSize].value = 0;
-  return array;
+  nodes.push_back(svm_node{});
+  nodes.back().index = -1;
+  nodes.back().value = 0;
+  return nodes;
 }
 
 std::vector<LabeledImage> readImagesFromFile(const std::string &filename, bool labeled) {
@@ -115,7 +119,7 @@ int main(int argc, char **argv) {
   std::vector<double> ys(n);
   for (int i = 0; i < n; i++) ys[i] = trainingImages[i].label.value();
   problem.y = ys.data();
-  std::vector<std::array<svm_node, imageSize + 1>> xs;
+  std::vector<std::vector<svm_node>> xs;
   for (int i = 0; i < n; i++) xs.push_back(naiveNodesFromImage(trainingImages[i].image));
   std::vector<svm_node *> pointersToXs;
   for (int i = 0; i < n; i++) pointersToXs.push_back(xs[i].data());
