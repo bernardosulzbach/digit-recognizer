@@ -9,6 +9,10 @@
 #include <sstream>
 #include <vector>
 
+#include <boost/filesystem.hpp>
+
+#include <opencv2/opencv.hpp>
+
 #include "SVM.h"
 
 #include "String.hpp"
@@ -24,6 +28,14 @@ constexpr size_t threshold = 1;
 
 using Label = uint8_t;
 
+void removeTree(const std::string &path) { boost::filesystem::remove_all(path); }
+
+void ensurePathExists(const std::string &path) {
+  if (!boost::filesystem::exists(path)) {
+    boost::filesystem::create_directory(path);
+  }
+}
+
 class Image {
  public:
   std::array<uint8_t, imageSize> data{};
@@ -35,6 +47,15 @@ class Image {
         pixel = 1;
       }
     }
+  }
+  void dump(const std::string &string) {
+    cv::Mat matrix(imageSide, imageSide, CV_8U);
+    for (size_t i = 0; i < imageSide; i++) {
+      for (size_t j = 0; j < imageSide; j++) {
+        matrix.at<uint8_t>(i, j) = data[imageSide * i + j] * 255U;
+      }
+    }
+    imwrite(string, matrix);
   }
   uint8_t operator[](size_t i) const { return data[i]; }
   uint8_t &operator[](size_t i) { return data[i]; }
@@ -115,15 +136,20 @@ std::vector<LabeledImage> readImagesFromFile(const std::string &filename, bool l
 }
 
 int main(int argc, char **argv) {
-  if (argc < 4) {
-    std::cout << "Usage: " << argv[0] << " [TRAINING FILE] [N] [M] (TESTING FILE)" << '\n';
+  if (argc < 5) {
+    std::cout << "Usage: " << argv[0] << " [TRAINING FILE] [TESTING FILE] [N] [M] (OPTIONS)" << '\n';
     return 1;
   }
+  const std::string dumpMistakes = "--dump-mistakes";
+  const std::string mistakesTree = "mistakes";
+  const std::string extension = ".png";
+  const auto separator = boost::filesystem::path::preferred_separator;
   std::string trainingFile = argv[1];
-  int n = stringToInteger(argv[2]);
-  int m = stringToInteger(argv[3]);
-  std::string testingFile;
-  if (argc >= 5) testingFile = argv[4];
+  std::string testingFile = argv[2];
+  int n = stringToInteger(argv[3]);
+  int m = stringToInteger(argv[4]);
+  std::set<std::string> options;
+  for (int i = 5; i < argc; i++) options.insert(std::string(argv[i]));
   Timer timer;
   timer.start();
   std::cout << "Reading images...";
@@ -164,10 +190,22 @@ int main(int argc, char **argv) {
   std::cout << "Evaluating model...";
   std::cout.flush();
   timer.restart();
+  if (options.count(dumpMistakes)) {
+    removeTree(mistakesTree);
+    ensurePathExists(mistakesTree);
+  }
   for (int i = 0; i < m; i++) {
     auto nodes = edgeCountersFromImage(trainingImages[n + i].image);
     const auto prediction = svm_predict(model, nodes.data());
     results[trainingImages[n + i].label.value()][prediction]++;
+    if (options.count(dumpMistakes)) {
+      if (prediction != trainingImages[n + i].label.value()) {
+        const auto predictionString = std::to_string(static_cast<int>(prediction));
+        const auto fullPath = mistakesTree + separator + std::to_string(trainingImages[n + i].label.value()) + "-as-" + predictionString;
+        ensurePathExists(fullPath);
+        trainingImages[n + i].image.dump(fullPath + separator + std::to_string(n + i) + extension);
+      }
+    }
   }
   timer.stop();
   std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
