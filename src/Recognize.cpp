@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <boost/filesystem.hpp>
+#include <boost/numeric/conversion/cast.hpp>
 
 #include <opencv2/opencv.hpp>
 
@@ -48,11 +49,11 @@ class Image {
       }
     }
   }
-  void dump(const std::string &string) {
+  void dump(const std::string &string) const {
     cv::Mat matrix(imageSide, imageSide, CV_8U);
     for (size_t i = 0; i < imageSide; i++) {
       for (size_t j = 0; j < imageSide; j++) {
-        matrix.at<uint8_t>(i, j) = data[i * imageSide + j] * 255U;
+        matrix.at<uint8_t>(i, j) = boost::numeric_cast<uint8_t>(data[i * imageSide + j] * 255U);
       }
     }
     imwrite(string, matrix);
@@ -153,6 +154,14 @@ std::vector<LabeledImage> readImagesFromFile(const std::string &filename, bool l
   return labeledImages;
 }
 
+template <typename T>
+std::vector<T> getPermutationVector(size_t size) {
+  std::vector<T> vector(size);
+  std::iota(begin(vector), end(vector), 0);
+  std::random_shuffle(begin(vector), end(vector));
+  return vector;
+}
+
 int main(int argc, char **argv) {
   if (argc < 5) {
     std::cout << "Usage: " << argv[0] << " [TRAINING FILE] [TESTING FILE] [N] [M] (OPTIONS)" << '\n';
@@ -187,7 +196,7 @@ int main(int argc, char **argv) {
   std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
   svm_problem problem{};
   problem.l = n;
-  std::vector<double> ys(n);
+  std::vector<double> ys(boost::numeric_cast<unsigned long>(n));
   for (int i = 0; i < n; i++) ys[i] = trainingImages[i].label.value();
   problem.y = ys.data();
   std::vector<std::vector<svm_node>> xs;
@@ -218,15 +227,16 @@ int main(int argc, char **argv) {
     ensurePathExists(mistakesTree);
   }
   for (int i = 0; i < m; i++) {
-    auto nodes = edgeCountersFromImage(trainingImages[n + i].image);
+    const auto &trainingImage = trainingImages[n + i];
+    auto nodes = edgeCountersFromImage(trainingImage.image);
     const auto prediction = svm_predict(model, nodes.data());
-    results[trainingImages[n + i].label.value()][prediction]++;
+    results[trainingImage.label.value()][prediction]++;
     if (options.count(dumpMistakes)) {
-      if (prediction != trainingImages[n + i].label.value()) {
+      if (prediction != trainingImage.label.value()) {
         const auto predictionString = std::to_string(static_cast<int>(prediction));
-        const auto fullPath = mistakesTree + separator + std::to_string(trainingImages[n + i].label.value()) + "-as-" + predictionString;
+        const auto fullPath = mistakesTree + separator + std::to_string(trainingImage.label.value()) + "-as-" + predictionString;
         ensurePathExists(fullPath);
-        trainingImages[n + i].image.dump(fullPath + separator + std::to_string(n + i) + extension);
+        trainingImage.image.dump(fullPath + separator + std::to_string(n + i) + extension);
       }
     }
   }
