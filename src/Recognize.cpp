@@ -52,10 +52,28 @@ class Image {
     cv::Mat matrix(imageSide, imageSide, CV_8U);
     for (size_t i = 0; i < imageSide; i++) {
       for (size_t j = 0; j < imageSide; j++) {
-        matrix.at<uint8_t>(i, j) = data[imageSide * i + j] * 255U;
+        matrix.at<uint8_t>(i, j) = data[i * imageSide + j] * 255U;
       }
     }
     imwrite(string, matrix);
+  }
+  size_t neighbors(ssize_t i, ssize_t j) {
+    size_t counter = 0;
+    for (ssize_t a = i - 1; a <= i + 1; a++) {
+      for (ssize_t b = j - 1; b <= j + 1; b++) {
+        if (a >= 0 && a < static_cast<ssize_t>(imageSide) && b >= 0 && b < static_cast<ssize_t>(imageSide) && (a != i || b != j) && data[a * imageSide + b] > 0) {
+          counter++;
+        }
+      }
+    }
+    return counter;
+  }
+  void removeIslands() {
+    for (size_t i = 0; i < imageSide; i++) {
+      for (size_t j = 0; j < imageSide; j++) {
+        if (neighbors(i, j) == 0) data[i * imageSide + j] = 0;
+      }
+    }
   }
   uint8_t operator[](size_t i) const { return data[i]; }
   uint8_t &operator[](size_t i) { return data[i]; }
@@ -141,6 +159,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   const std::string dumpMistakes = "--dump-mistakes";
+  const std::string removeIslands = "--remove-islands";
   const std::string mistakesTree = "mistakes";
   const std::string extension = ".png";
   const auto separator = boost::filesystem::path::preferred_separator;
@@ -160,6 +179,10 @@ int main(int argc, char **argv) {
   if (!testingFile.empty()) readImagesFromFile(testingFile, false);
   for (auto &labeledImage : trainingImages) labeledImage.image.applyThreshold();
   for (auto &labeledImage : testingImages) labeledImage.image.applyThreshold();
+  if (options.count(removeIslands)) {
+    for (auto &labeledImage : trainingImages) labeledImage.image.removeIslands();
+    for (auto &labeledImage : testingImages) labeledImage.image.removeIslands();
+  }
   timer.stop();
   std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
   svm_problem problem{};
@@ -211,6 +234,7 @@ int main(int argc, char **argv) {
   std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
   size_t right = 0;
   size_t wrong = 0;
+  std::ofstream mistakesFile("mistakes.txt");
   for (size_t r = 0; r < 10; r++) {
     const auto &row = results[r];
     std::vector<std::pair<int, int>> predictions;
@@ -225,11 +249,11 @@ int main(int argc, char **argv) {
     std::sort(rbegin(predictions), rend(predictions));
     for (int i = 0; i < 10; i++) {
       if (predictions[i].first) {
-        std::cout << r << " >> " << predictions[i].second << ": " << padString(std::to_string(predictions[i].first), 10) << "\n";
+        mistakesFile << r << " >> " << predictions[i].second << ": " << padString(std::to_string(predictions[i].first), 6) << "\n";
       }
     }
   }
   std::cout << "Got " << right << " of " << (right + wrong) << "." << ' ';
-  std::cout << "Rate is " << right / (double)(right + wrong) << "." << '\n';
+  std::cout << "Accuracy is " << right / (double)(right + wrong) << "." << '\n';
   return 0;
 }
