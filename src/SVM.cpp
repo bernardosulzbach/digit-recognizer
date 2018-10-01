@@ -2620,10 +2620,7 @@ const char *svm_check_parameter(const svm_problem *prob, const svm_parameter *pa
   return NULL;
 }
 
-int svm_check_probability_model(const svm_model *model) {
-  return ((model->param.svm_type == C_SVC || model->param.svm_type == NU_SVC) && model->probA != NULL && model->probB != NULL) ||
-         ((model->param.svm_type == EPSILON_SVR || model->param.svm_type == NU_SVR) && model->probA != NULL);
-}
+int svm_check_probability_model(const svm_model *model) { return ((model->param.svm_type == C_SVC || model->param.svm_type == NU_SVC) && model->probA != NULL && model->probB != NULL) || ((model->param.svm_type == EPSILON_SVR || model->param.svm_type == NU_SVR) && model->probA != NULL); }
 
 void svm_set_print_string_function(void (*print_func)(const char *)) {
   if (print_func == NULL)

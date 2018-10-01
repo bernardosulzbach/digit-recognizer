@@ -1,3 +1,5 @@
+#include <utility>
+
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -16,132 +18,51 @@
 
 #include "SVM.h"
 
+#include "EdgeCounters.hpp"
+#include "Filesystem.hpp"
+#include "Image.hpp"
+#include "ProcessedImage.hpp"
 #include "String.hpp"
 #include "Timer.hpp"
 
-constexpr double svmEps = 0.001;
-
 constexpr double cacheSize = 1024;
 
-constexpr size_t imageSide = 28;
-constexpr size_t imageSize = imageSide * imageSide;
-constexpr size_t threshold = 1;
+using Label = uint16_t;
 
-using Label = uint8_t;
+const auto separator = boost::filesystem::path::preferred_separator;
 
-void removeTree(const std::string &path) { boost::filesystem::remove_all(path); }
-
-void ensurePathExists(const std::string &path) {
-  if (!boost::filesystem::exists(path)) {
-    boost::filesystem::create_directory(path);
-  }
-}
-
-class Image {
+class Configuration {
  public:
-  std::array<uint8_t, imageSize> data{};
-  void applyThreshold() {
-    for (auto &pixel : data) {
-      if (pixel < threshold) {
-        pixel = 0;
-      } else {
-        pixel = 1;
-      }
-    }
-  }
-  void dump(const std::string &string) const {
-    cv::Mat matrix(imageSide, imageSide, CV_8U);
-    for (size_t i = 0; i < imageSide; i++) {
-      for (size_t j = 0; j < imageSide; j++) {
-        matrix.at<uint8_t>(i, j) = boost::numeric_cast<uint8_t>(data[i * imageSide + j] * 255U);
-      }
-    }
-    imwrite(string, matrix);
-  }
-  size_t neighbors(ssize_t i, ssize_t j) {
-    size_t counter = 0;
-    for (ssize_t a = i - 1; a <= i + 1; a++) {
-      for (ssize_t b = j - 1; b <= j + 1; b++) {
-        if (a >= 0 && a < static_cast<ssize_t>(imageSide) && b >= 0 && b < static_cast<ssize_t>(imageSide) && (a != i || b != j) && data[a * imageSide + b] > 0) {
-          counter++;
-        }
-      }
-    }
-    return counter;
-  }
-  void removeIslands() {
-    for (size_t i = 0; i < imageSide; i++) {
-      for (size_t j = 0; j < imageSide; j++) {
-        if (neighbors(i, j) == 0) data[i * imageSide + j] = 0;
-      }
-    }
-  }
-  uint8_t operator[](size_t i) const { return data[i]; }
-  uint8_t &operator[](size_t i) { return data[i]; }
+  std::string trainingFile;
+  std::string testingFile;
+  uint32_t trainingSamples = 35000;
+  uint32_t testingSamples = 7000;
+  bool verticallyFittingImages = true;
+  uint8_t threshold = 64;
+  bool removeIslands = false;
+  double svmEpsilon = 0.001;
+  bool dumpMistakes = false;
 };
 
-class LabeledImage {
- public:
-  std::optional<Label> label;
-  Image image;
-
-  LabeledImage(std::optional<Label> label, const Image &image) : label(label), image(image) {}
-};
-
-std::string padString(std::string string, size_t digits) {
-  if (string.size() >= digits) return string;
-  std::string result;
-  size_t required = digits - string.size();
-  for (size_t i = 0; i < required; i++) result += ' ';
-  result += string;
-  return result;
+std::ostream &operator<<(std::ostream &os, const Configuration &configuration) {
+  os << configuration.trainingFile << ",";
+  os << configuration.testingFile << ",";
+  os << configuration.trainingSamples << ",";
+  os << configuration.testingSamples << ",";
+  os << configuration.verticallyFittingImages << ",";
+  os << static_cast<uint16_t>(configuration.threshold) << ",";
+  os << configuration.removeIslands << ",";
+  os << configuration.svmEpsilon << ",";
+  os << configuration.dumpMistakes;
+  return os;
 }
 
-std::vector<svm_node> simpleNodesFromImage(const Image &image) {
-  std::vector<svm_node> nodes;
-  for (size_t i = 0; i < imageSize; i++) {
-    if (image[i] != 0) {
-      nodes.push_back(svm_node{});
-      nodes.back().index = static_cast<int>(i + 1);
-      nodes.back().value = image[i];
-    }
-  }
-  nodes.push_back(svm_node{});
-  nodes.back().index = -1;
-  nodes.back().value = 0;
-  return nodes;
-}
-
-std::vector<svm_node> edgeCountersFromImage(const Image &image) {
-  std::vector<size_t> edges(2 * imageSide);
-  for (size_t i = 1; i < imageSide; i++) {
-    for (size_t j = 1; j < imageSide; j++) {
-      if (image[i * imageSide + j] != image[(i - 1) * imageSide + j]) edges[i]++;
-      if (image[i * imageSide + j] != image[i * imageSide + (j - 1)]) edges[imageSide + j]++;
-    }
-  }
-  std::vector<svm_node> nodes;
-  for (size_t i = 0; i < 2 * imageSide; i++) {
-    if (edges[i] != 0) {
-      nodes.push_back(svm_node{});
-      nodes.back().index = static_cast<int>(i + 1);
-      nodes.back().value = edges[i];
-    }
-  }
-  nodes.push_back(svm_node{});
-  nodes.back().index = -1;
-  nodes.back().value = 0;
-  return nodes;
-}
-
-std::vector<LabeledImage> readImagesFromFile(const std::string &filename, bool labeled) {
-  std::vector<LabeledImage> labeledImages;
+std::vector<Image> readImagesFromFile(const std::string &filename, bool labeled) {
+  std::vector<Image> labeledImages;
   std::ifstream ifs(filename);
   ifs.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
   uint16_t value;
   while (ifs >> value) {
-    std::optional<Label> optionalLabel;
-    if (labeled) optionalLabel = static_cast<Label>(value);
     Image image;
     if (!labeled) image[0] = static_cast<uint8_t>(value);
     for (size_t j = labeled ? 0 : 1; j < imageSize; j++) {
@@ -149,9 +70,21 @@ std::vector<LabeledImage> readImagesFromFile(const std::string &filename, bool l
       ifs >> comma >> value;
       image[j] = static_cast<uint8_t>(value);
     }
-    labeledImages.emplace_back(optionalLabel, image);
+    labeledImages.emplace_back(image);
   }
   return labeledImages;
+}
+
+std::vector<Label> readLabelsFromFile(const std::string &filename) {
+  std::vector<Label> labels;
+  std::ifstream ifs(filename);
+  ifs.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  uint16_t value;
+  while (ifs >> value) {
+    labels.push_back(static_cast<uint8_t>(value));
+    ifs.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  }
+  return labels;
 }
 
 template <typename T>
@@ -162,45 +95,61 @@ std::vector<T> getPermutationVector(size_t size) {
   return vector;
 }
 
-int main(int argc, char **argv) {
-  if (argc < 5) {
-    std::cout << "Usage: " << argv[0] << " [TRAINING FILE] [TESTING FILE] [N] [M] (OPTIONS)" << '\n';
-    return 1;
-  }
-  const std::string dumpMistakes = "--dump-mistakes";
-  const std::string removeIslands = "--remove-islands";
-  const std::string mistakesTree = "mistakes";
-  const std::string extension = ".png";
-  const auto separator = boost::filesystem::path::preferred_separator;
-  std::string trainingFile = argv[1];
-  std::string testingFile = argv[2];
-  int n = stringToInteger(argv[3]);
-  int m = stringToInteger(argv[4]);
-  std::set<std::string> options;
-  for (int i = 5; i < argc; i++) options.insert(std::string(argv[i]));
+double test(const Configuration &configuration) {
+  const std::string mistakesDirectory = "mistakes";
+  const std::string imageExtension = ".png";
+  const std::string textFileExtension = ".txt";
+  const auto trainingFile = configuration.trainingFile;
+  const auto testingFile = configuration.testingFile;
+  int n = configuration.trainingSamples;
+  int m = configuration.testingSamples;
   Timer timer;
   timer.start();
   std::cout << "Reading images...";
   std::cout.flush();
-  std::vector<LabeledImage> trainingImages = readImagesFromFile(trainingFile, true);
-  if (static_cast<unsigned>(n + m) > trainingImages.size()) throw std::runtime_error("Not enough training images.");
-  std::vector<LabeledImage> testingImages;
+  std::vector<Image> trainingImages = readImagesFromFile(trainingFile, true);
+  if (static_cast<unsigned>(n + m) > trainingImages.size()) {
+    const auto required = std::to_string(n + m);
+    const auto has = std::to_string(trainingImages.size());
+    throw std::runtime_error("Not enough training images. Required " + required + ", but has only " + has + ".");
+  }
+  const auto trainingLabels = readLabelsFromFile(trainingFile);
+  std::vector<Image> testingImages;
   if (!testingFile.empty()) readImagesFromFile(testingFile, false);
-  for (auto &labeledImage : trainingImages) labeledImage.image.applyThreshold();
-  for (auto &labeledImage : testingImages) labeledImage.image.applyThreshold();
-  if (options.count(removeIslands)) {
-    for (auto &labeledImage : trainingImages) labeledImage.image.removeIslands();
-    for (auto &labeledImage : testingImages) labeledImage.image.removeIslands();
+  if (configuration.removeIslands) {
+    for (auto &image : trainingImages) image.removeIslands();
+    for (auto &image : testingImages) image.removeIslands();
+  }
+  std::vector<ProcessedImage> processedTrainingImages;
+  std::vector<ProcessedImage> processedTestingImages;
+  for (const auto &image : trainingImages) processedTrainingImages.emplace_back(image);
+  for (const auto &image : testingImages) processedTestingImages.emplace_back(image);
+  if (configuration.verticallyFittingImages) {
+    for (auto &processedImage : processedTrainingImages) {
+      processedImage.image.bilinearScaleToFitVertically(processedImage.counters.getBoundingBox());
+    }
+    for (auto &processedImage : processedTestingImages) {
+      processedImage.image.bilinearScaleToFitVertically(processedImage.counters.getBoundingBox());
+    }
+  }
+  if (configuration.threshold != 0) {
+    for (auto &processedImage : processedTrainingImages) processedImage.image.applyThreshold(configuration.threshold);
+    for (auto &processedImage : processedTestingImages) processedImage.image.applyThreshold(configuration.threshold);
   }
   timer.stop();
   std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
   svm_problem problem{};
   problem.l = n;
   std::vector<double> ys(boost::numeric_cast<unsigned long>(n));
-  for (int i = 0; i < n; i++) ys[i] = trainingImages[i].label.value();
+  for (int i = 0; i < n; i++) ys[i] = trainingLabels[i];
   problem.y = ys.data();
   std::vector<std::vector<svm_node>> xs;
-  for (int i = 0; i < n; i++) xs.push_back(edgeCountersFromImage(trainingImages[i].image));
+  size_t totalNodes = 0;
+  for (int i = 0; i < n; i++) {
+    const auto nodes = processedTrainingImages[i].svmNodesFromValues();
+    xs.push_back(nodes);
+    totalNodes += nodes.size();
+  }
   std::vector<svm_node *> pointersToXs;
   for (int i = 0; i < n; i++) pointersToXs.push_back(xs[i].data());
   problem.x = pointersToXs.data();
@@ -209,7 +158,7 @@ int main(int argc, char **argv) {
   parameter.kernel_type = LINEAR;
   parameter.cache_size = cacheSize;
   parameter.C = 1.0;
-  parameter.eps = svmEps;
+  parameter.eps = configuration.svmEpsilon;
   const auto error_message = svm_check_parameter(&problem, &parameter);
   if (error_message) throw std::runtime_error(error_message);
   std::cout << "Training model...";
@@ -222,48 +171,103 @@ int main(int argc, char **argv) {
   std::cout << "Evaluating model...";
   std::cout.flush();
   timer.restart();
-  if (options.count(dumpMistakes)) {
-    removeTree(mistakesTree);
-    ensurePathExists(mistakesTree);
+  if (configuration.dumpMistakes) {
+    removeTree(mistakesDirectory);
+    ensurePathExists(mistakesDirectory);
   }
   for (int i = 0; i < m; i++) {
-    const auto &trainingImage = trainingImages[n + i];
-    auto nodes = edgeCountersFromImage(trainingImage.image);
-    const auto prediction = svm_predict(model, nodes.data());
-    results[trainingImage.label.value()][prediction]++;
-    if (options.count(dumpMistakes)) {
-      if (prediction != trainingImage.label.value()) {
-        const auto predictionString = std::to_string(static_cast<int>(prediction));
-        const auto fullPath = mistakesTree + separator + std::to_string(trainingImage.label.value()) + "-as-" + predictionString;
+    auto &trainingImage = processedTrainingImages[n + i];
+    auto nodes = trainingImage.svmNodesFromValues();
+    totalNodes += nodes.size();
+    const auto prediction = static_cast<Label>(svm_predict(model, nodes.data()));
+    results[trainingLabels[n + i]][prediction]++;
+    if (configuration.dumpMistakes) {
+      if (prediction != trainingLabels[n + i]) {
+        const auto predictionString = std::to_string(prediction);
+        const auto fullPath = mistakesDirectory + separator + std::to_string(trainingLabels[n + i]) + "-as-" + predictionString;
         ensurePathExists(fullPath);
-        trainingImage.image.dump(fullPath + separator + std::to_string(n + i) + extension);
+        trainingImage.image.dump(fullPath + separator + std::to_string(n + i) + imageExtension);
+        std::ofstream rayCounters(fullPath + separator + std::to_string(n + i) + textFileExtension);
+        for (auto svm_node : nodes) rayCounters << svm_node.index << ": " << svm_node.value << '\n';
       }
     }
   }
   timer.stop();
   std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
-  size_t right = 0;
-  size_t wrong = 0;
-  std::ofstream mistakesFile("mistakes.txt");
-  for (size_t r = 0; r < 10; r++) {
-    const auto &row = results[r];
-    std::vector<std::pair<int, int>> predictions;
-    for (size_t i = 0; i < 10; i++) {
-      predictions.emplace_back(row[i], i);
-      if (i == r) {
-        right += row[i];
-      } else {
-        wrong += row[i];
-      }
+  std::cout << "On average, there are " << toString(totalNodes / static_cast<double>(n + m), 3) << " nodes per image." << '\n';
+  class MistakeClass {
+   public:
+    Label correct;
+    Label answer;
+    uint32_t count;
+
+    MistakeClass(Label correct, Label answer, uint32_t count) : correct(correct), answer(answer), count(count) {}
+
+    bool operator<(MistakeClass &rhs) const {
+      if (count < rhs.count) return true;
+      if (count == rhs.count && correct < rhs.correct) return true;
+      return count == rhs.count && correct == rhs.correct && answer < rhs.answer;
     }
-    std::sort(rbegin(predictions), rend(predictions));
+  };
+  size_t right{};
+  size_t wrong{};
+  std::vector<MistakeClass> mistakeClasses;
+  for (int r = 0; r < 10; r++) {
     for (int i = 0; i < 10; i++) {
-      if (predictions[i].first) {
-        mistakesFile << r << " >> " << predictions[i].second << ": " << padString(std::to_string(predictions[i].first), 6) << "\n";
+      if (i == r) {
+        right += results[r][i];
+      } else {
+        wrong += results[r][i];
+        mistakeClasses.emplace_back(r, i, results[r][i]);
       }
     }
   }
+  if (configuration.dumpMistakes) {
+    std::sort(rbegin(mistakeClasses), rend(mistakeClasses));
+    std::ofstream mistakesFile(mistakesDirectory + separator + "summary.txt");
+    for (const auto mistakeClass : mistakeClasses) {
+      mistakesFile << padString(std::to_string(mistakeClass.count), 5) << " | " << mistakeClass.answer << " >> " << mistakeClass.correct << "\n";
+    }
+  }
   std::cout << "Got " << right << " of " << (right + wrong) << "." << ' ';
-  std::cout << "Accuracy is " << right / (double)(right + wrong) << "." << '\n';
+  const auto accuracy = right / (double)(right + wrong);
+  std::cout << "Accuracy is " << accuracy << "." << '\n';
+  return accuracy;
+}
+
+int main(int argc, char **argv) {
+  if (argc < 5) {
+    std::cout << "Usage: " << argv[0] << " [TRAINING FILE] [TESTING FILE] [TRAINING SET SIZE] [TESTING SET SIZE]" << '\n';
+    return 1;
+  }
+  std::string trainingFile = argv[1];
+  std::string testingFile = argv[2];
+  const auto trainingSamples = stringToIntegral<uint32_t>(argv[3]);
+  const auto testingSamples = stringToIntegral<uint32_t>(argv[4]);
+  std::vector<uint8_t> thresholds{1u, 5u, 15u, 45u, 135u, 250u};
+  for (bool verticallyFittingImages : {false, true}) {
+    for (const auto threshold : thresholds) {
+      for (bool removeIslands : {false, true}) {
+        for (double svmEpsilon : {1e-3, 3e-3, 9e-3, 27e-3}) {
+          Configuration configuration;
+          configuration.trainingFile = trainingFile;
+          configuration.testingFile = testingFile;
+          configuration.trainingSamples = trainingSamples;
+          configuration.testingSamples = testingSamples;
+          configuration.verticallyFittingImages = verticallyFittingImages;
+          configuration.threshold = threshold;
+          configuration.removeIslands = removeIslands;
+          configuration.svmEpsilon = svmEpsilon;
+          configuration.dumpMistakes = false;
+          Timer timer;
+          timer.start();
+          const auto accuracy = test(configuration);
+          timer.stop();
+          std::ofstream output("results.txt", std::ios_base::app);
+          output << configuration << ',' << timer.getElapsed().getNanoseconds() << ',' << accuracy << '\n';
+        }
+      }
+    }
+  }
   return 0;
 }
