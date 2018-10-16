@@ -10,8 +10,11 @@ extern "C" {
 extern int libsvm_version;
 
 struct svm_node {
-  int index;
-  double value;
+  int index{};
+  double value{};
+
+  svm_node() = default;
+  svm_node(int index, double value) : index(index), value(value) {}
 };
 
 struct svm_problem {
