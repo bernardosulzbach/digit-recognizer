@@ -95,7 +95,7 @@ std::vector<T> getPermutationVector(size_t size) {
   return vector;
 }
 
-double test(const Configuration &configuration) {
+double test(const Configuration &configuration, const std::vector<Label> &trainingLabels, const std::vector<Image> &trainingImages, const std::vector<Image> &testingImages) {
   const std::string mistakesDirectory = "mistakes";
   const std::string imageExtension = ".png";
   const std::string textFileExtension = ".txt";
@@ -103,41 +103,29 @@ double test(const Configuration &configuration) {
   const auto testingFile = configuration.testingFile;
   int n = configuration.trainingSamples;
   int m = configuration.testingSamples;
+  std::cout << "Training model...";
   Timer timer;
   timer.start();
-  std::cout << "Reading images...";
-  std::cout.flush();
-  std::vector<Image> trainingImages = readImagesFromFile(trainingFile, true);
-  if (static_cast<unsigned>(n + m) > trainingImages.size()) {
-    const auto required = std::to_string(n + m);
-    const auto has = std::to_string(trainingImages.size());
-    throw std::runtime_error("Not enough training images. Required " + required + ", but has only " + has + ".");
-  }
-  const auto trainingLabels = readLabelsFromFile(trainingFile);
-  std::vector<Image> testingImages;
-  if (!testingFile.empty()) readImagesFromFile(testingFile, false);
-  if (configuration.removeIslands) {
-    for (auto &image : trainingImages) image.removeIslands();
-    for (auto &image : testingImages) image.removeIslands();
-  }
   std::vector<ProcessedImage> processedTrainingImages;
   std::vector<ProcessedImage> processedTestingImages;
   for (const auto &image : trainingImages) processedTrainingImages.emplace_back(image);
   for (const auto &image : testingImages) processedTestingImages.emplace_back(image);
   if (configuration.verticallyFittingImages) {
     for (auto &processedImage : processedTrainingImages) {
-      processedImage.image.bilinearScaleToFitVertically(processedImage.counters.getBoundingBox());
+      processedImage.image = processedImage.image.bilinearScaleToFitVertically(processedImage.counters.getBoundingBox());
     }
     for (auto &processedImage : processedTestingImages) {
-      processedImage.image.bilinearScaleToFitVertically(processedImage.counters.getBoundingBox());
+      processedImage.image = processedImage.image.bilinearScaleToFitVertically(processedImage.counters.getBoundingBox());
     }
   }
   if (configuration.threshold != 0) {
     for (auto &processedImage : processedTrainingImages) processedImage.image.applyThreshold(configuration.threshold);
     for (auto &processedImage : processedTestingImages) processedImage.image.applyThreshold(configuration.threshold);
   }
-  timer.stop();
-  std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
+  if (configuration.removeIslands) {
+    for (auto &processedImage : processedTrainingImages) processedImage.image.removeIslands();
+    for (auto &processedImage : processedTestingImages) processedImage.image.removeIslands();
+  }
   svm_problem problem{};
   problem.l = n;
   std::vector<double> ys(boost::numeric_cast<unsigned long>(n));
@@ -161,9 +149,7 @@ double test(const Configuration &configuration) {
   parameter.eps = configuration.svmEpsilon;
   const auto error_message = svm_check_parameter(&problem, &parameter);
   if (error_message) throw std::runtime_error(error_message);
-  std::cout << "Training model...";
   std::cout.flush();
-  timer.restart();
   const auto model = svm_train(&problem, &parameter);
   timer.stop();
   std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
@@ -244,6 +230,22 @@ int main(int argc, char **argv) {
   std::string testingFile = argv[2];
   const auto trainingSamples = stringToIntegral<uint32_t>(argv[3]);
   const auto testingSamples = stringToIntegral<uint32_t>(argv[4]);
+  Timer timer;
+  timer.start();
+  std::cout << "Reading images...";
+  std::cout.flush();
+  const auto trainingLabels = readLabelsFromFile(trainingFile);
+  std::vector<Image> trainingImages = readImagesFromFile(trainingFile, true);
+  uint32_t requiredSamples = trainingSamples + testingSamples;
+  if (static_cast<unsigned>(requiredSamples) > trainingImages.size()) {
+    const auto requiredSamplesString = std::to_string(requiredSamples);
+    const auto has = std::to_string(trainingImages.size());
+    throw std::runtime_error("Not enough training images. Required " + requiredSamplesString + ", but has only " + has + ".");
+  }
+  std::vector<Image> testingImages;
+  if (!testingFile.empty()) readImagesFromFile(testingFile, false);
+  timer.stop();
+  std::cout << " took " << timer.getElapsed().toSecondsString() << "." << '\n';
   std::vector<uint8_t> thresholds{1u, 5u, 15u, 45u, 135u, 250u};
   for (bool verticallyFittingImages : {false, true}) {
     for (const auto threshold : thresholds) {
@@ -259,9 +261,8 @@ int main(int argc, char **argv) {
           configuration.removeIslands = removeIslands;
           configuration.svmEpsilon = svmEpsilon;
           configuration.dumpMistakes = false;
-          Timer timer;
-          timer.start();
-          const auto accuracy = test(configuration);
+          timer.restart();
+          const auto accuracy = test(configuration, trainingLabels, trainingImages, testingImages);
           timer.stop();
           std::ofstream output("results.txt", std::ios_base::app);
           output << configuration << ',' << timer.getElapsed().getNanoseconds() << ',' << accuracy << '\n';

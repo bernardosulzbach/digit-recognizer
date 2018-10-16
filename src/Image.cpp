@@ -1,5 +1,7 @@
 #include "Image.hpp"
 
+#include "UnionFind.hpp"
+
 void Image::applyThreshold(uint8_t threshold) {
   if (threshold == 0) throw std::runtime_error("Cannot have threshold of 0.");
   for (auto &pixel : data) {
@@ -39,11 +41,37 @@ size_t Image::neighbors(ssize_t i, ssize_t j) {
   return counter;
 }
 
+void Image::assertIsDiscrete() const {
+  for (size_t i = 0; i < imageSize; i++) {
+    if (data[i] != 0 && data[i] != 1) throw std::runtime_error("Image should only have 0 and 1.");
+  }
+}
+
 void Image::removeIslands() {
+  assertIsDiscrete();
+  UnionFind unionFind(imageSide * imageSide);
   for (size_t i = 0; i < imageSide; i++) {
     for (size_t j = 0; j < imageSide; j++) {
-      if (neighbors(i, j) == 0) data[i * imageSide + j] = 0;
+      size_t x1 = (i + 0) * imageSide + (j + 0);
+      if (data[x1]) {
+        if (i + 1 < imageSide) {
+          size_t x2 = (i + 1) * imageSide + (j + 0);
+          if (data[x2] == 1) unionFind.connect(x1, x2);
+        }
+        if (j + 1 < imageSide) {
+          size_t x2 = (i + 0) * imageSide + (j + 1);
+          if (data[x2] == 1) unionFind.connect(x1, x2);
+        }
+      }
     }
+  }
+  std::vector<uint32_t> componentSize(imageSize);
+  for (size_t i = 0; i < imageSize; i++) componentSize.at(unionFind.getComponent(i))++;
+  const auto maximumSize = std::max_element(begin(componentSize), end(componentSize));
+  const auto distance = std::distance(begin(componentSize), maximumSize);
+  const auto largestComponent = boost::numeric_cast<UnionFindInteger>(distance);
+  for (size_t i = 0; i < imageSize; i++) {
+    if (unionFind.getComponent(i) != largestComponent) data[i] = 0;
   }
 }
 

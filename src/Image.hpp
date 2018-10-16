@@ -19,6 +19,8 @@ class Image {
 
   size_t neighbors(ssize_t i, ssize_t j);
 
+  void assertIsDiscrete() const;
+
   void removeIslands();
 
   float linearInterpolate(float s, float e, float t);
